@@ -1,0 +1,1 @@
+-e git+https://github.com/GuessWho91/evm_wallet#egg=evm_wallet
