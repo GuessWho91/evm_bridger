@@ -28,14 +28,14 @@ class Bridger(W3Transactor):
                 f'This chain is not available in this protocol'
             )
 
-    def bridge(self, token: Coin, chain_to: Chains, amount):
+    async def bridge(self, token: Coin, chain_to: Chains, amount):
 
         if not self.contract.is_chain_available(chain_to):
             raise W3Error(
                 f'This chain is not available in this protocol'
             )
 
-        self.wallet.logger.info(f"[Bridger][{self.wallet.address}] start bridge {amount} of {token.__class__.__name__} "
+        self.wallet.logger.info(f"[Bridger] [{self.wallet.address}] Start bridge {amount} of {token.__class__.__name__} "
                                 f"from {self.chain} to {chain_to} by {self.contract.__class__.__name__}")
 
         token_to_bridge = self.wallet.web3.to_checksum_address(token.get_address())
@@ -45,67 +45,73 @@ class Bridger(W3Transactor):
         self.approve_token_if_need(token, amount_wei, self.contract.router_address)
 
         txn = self.contract.get_transaction(token_to_bridge, chain_to, amount_wei)
-        tx_hex = self.wallet.sigh_transaction(txn)
+        tx_hex = await self.wallet.sigh_transaction(txn)
 
-        self.wallet.logger.success(f"[Bridger][{self.wallet.address}] Transaction send succeed "
+        self.wallet.logger.success(f"[Bridger] [{self.wallet.address}] Transaction send succeed "
                                    f"{self.chain.get_scan_url()}{tx_hex}")
         return tx_hex
 
     @staticmethod
-    def __refill_opbnb_gas__(wallet: Wallet):
+    async def __refill_opbnb_gas__(wallet: Wallet,amount=0):
 
         try:
             wallet = Wallet(Chains.OPBNB, wallet.private_key)
 
             balance_op_bnb = wallet.get_balance()
-            if balance_op_bnb['balance'] > 0.001:
-                wallet.logger.info(f"[Bridger][{wallet.address}] already have enough op_bnb {balance_op_bnb['balance']}")
+            if balance_op_bnb['balance'] > 0.005:
+                wallet.logger.info(f"[Bridger] [{wallet.address}] Already have enough op_bnb {balance_op_bnb['balance']}")
                 return
 
             wallet = Wallet(Chains.BSC, wallet.private_key)
             balance_bnb = wallet.get_balance()
             if balance_bnb['balance'] < 0.0007:
-                raise W3Error(f"[Bridger][{wallet.address}] balance of bnb is too low {balance_bnb['balance']}")
+                raise W3Error(f"[Bridger] [{wallet.address}] Balance of bnb is too low {balance_bnb['balance']}")
 
             bridger = Bridger(OPBNBBridge(wallet))
-            amount = random.randint(20, 30)
-            bridger.bridge(BNB(Chains.BSC), Chains.OPBNB, amount / 10000)
+
+            if amount == 0:
+                amount = random.randint(20, 30)
+
+            await bridger.bridge(BNB(Chains.BSC), Chains.OPBNB, amount / 10000)
 
         except W3Error as e:
             wallet.logger.error(e.msg)
 
     @staticmethod
-    def __refill_chain_gas__(wallet: Wallet, chain_from: Chains, chain_to: Chains):
+    async def __refill_chain_gas__(wallet: Wallet, chain_from: Chains, chain_to: Chains,amount=0):
 
         try:
             wallet = Wallet(chain_to, wallet.private_key)
 
             balance_gas = wallet.get_balance()
-            if balance_gas['balance'] > chain_to.get_min_gas():
+            if balance_gas['balance'] > chain_to.get_min_gas()*5:
                 wallet.logger.info(
-                    f"[Bridger][{wallet.address}] already have enough {chain_to.name} {balance_gas['balance']}")
+                    f"[Bridger] [{wallet.address}] Already have enough {chain_to.name} {balance_gas['balance']}")
                 return
 
             wallet = Wallet(chain_from, wallet.private_key)
             balance_from = wallet.get_balance()
 
-            amount = random.randint(10, 20)
-            amount_to_send = amount * chain_from.get_min_gas()
+            if amount == 0:
+                amount = random.randint(10, 20)
+                amount_to_send = amount * chain_from.get_min_gas()
+            else:
+                amount_to_send = amount
 
             if balance_from['balance'] < (amount_to_send + chain_from.get_min_gas()):
-                raise W3Error(f"[Bridger][{wallet.address}] balance of {chain_from.name} is too low "
+                raise W3Error(f"[Bridger] [{wallet.address}] Balance of {chain_from.name} is too low "
                               f"{balance_from['balance']} need {amount_to_send}")
 
             bridger = Bridger(Bungee(wallet))
-            bridger.bridge(chain_from.get_main_coin(), chain_to, amount_to_send)
+            await bridger.bridge(chain_from.get_main_coin(), chain_to, amount_to_send)
 
         except W3Error as e:
             wallet.logger.error(e.msg)
 
     @staticmethod
-    def refill_chain_gas(wallet: Wallet, chain_from: Chains, chain_to: Chains):
+    async def refill_chain_gas(wallet: Wallet, chain_from: Chains, chain_to: Chains, amount=0):
 
         if chain_from.name == Chains.BSC.name and chain_to.name == Chains.OPBNB.name:
-            Bridger.__refill_opbnb_gas__(wallet)
+            await Bridger.__refill_opbnb_gas__(wallet, amount)
         else:
-            Bridger.__refill_chain_gas__(wallet, chain_from, chain_to)
+            await Bridger.__refill_chain_gas__(wallet, chain_from, chain_to, amount)
